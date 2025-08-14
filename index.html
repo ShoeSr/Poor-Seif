@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>بازی سیف و کاشی‌ها</title>
+<style>
+  :root {
+    --w: 400px;
+    --h: 600px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    color: #fff;
+    font-family: Tahoma, sans-serif;
+    direction: rtl;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    height: 100%;
+  }
+  .wrap {
+    position: relative;
+    width: var(--w);
+    height: var(--h);
+    margin: 0 auto;
+    top: 0;
+  }
+  /* مقیاس برای موبایل */
+  @media (max-width: 420px) {
+    .wrap {
+      width: 100vw;
+      height: calc(100vw * 1.5);
+    }
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #87CEEB; /* آسمانی */
+    border: 2px solid #222;
+  }
+  #overlay {
+    position: absolute; inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    background: #000;
+    text-align: center;
+    padding: 24px;
+    gap: 16px;
+  }
+  #overlay h1 {
+    margin: 0; font-size: 22px; line-height: 1.8;
+    font-weight: normal; color: #fff;
+  }
+  .btn {
+    background: #fff; color: #000; border: none;
+    padding: 10px 18px; font-size: 16px; cursor: pointer;
+  }
+  .hud {
+    position: absolute; top: 8px; right: 10px;
+    background: rgba(0,0,0,0.25);
+    padding: 6px 10px; border-radius: 6px;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap" id="wrap">
+    <div id="overlay">
+      <h1>سلام من سیفم ، باید از کاشی‌های که بر سرم می‌ریزد فرار کنم ، اینها همش تقصیر کمالیست</h1>
+      <button class="btn" id="startBtn">بزن بریم</button>
+      <div style="opacity:.85; font-size:13px;">حرکت: لمس/کشیدن روی صفحه یا کلیدهای جهت چپ/راست</div>
+    </div>
+    <div class="hud" id="hud">نمره پارسافر: 0</div>
+    <canvas id="game" width="400" height="600"></canvas>
+  </div>
+
+<script>
+(() => {
+  // عناصر
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const hud = document.getElementById('hud');
+
+  // وضعیت بازی
+  let state = 'intro'; // intro | playing | gameover
+
+  // ابعاد منطقی ثابت؛ ورودی‌ها را با مختصات باندینگ‌ریک می‌خوانیم تا مقیاس مهم نباشد.
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // بازیکن (صورت)
+  const player = {
+    x: W / 2,
+    y: H - 80,
+    r: 24,              // شعاع صورت
+    speed: 300,         // px/sec برای حرکت با کیبورد
+    targetMode: true    // با لمس/ماوس مستقیم می‌ره زیر انگشت
+  };
+
+  // پارامترهای دشواری (آسون)
+  let fallSpeed = 140;      // سرعت سقوط کاشی‌ها (px/sec)
+  let spawnMin = 900;       // حداقل فاصله تولید (ms)
+  let spawnMax = 1300;      // حداکثر فاصله تولید (ms)
+  let tileSize = 40;
+
+  // متغیرها
+  let tiles = [];
+  let score = 0;
+  let lastTime = 0;
+  let spawnTimer = 0;
+  let spawnInterval = rand(spawnMin, spawnMax);
+
+  // ورودی‌ها
+  const keys = { left: false, right: false };
+  let pointerActive = false;
+  let pointerX = player.x;
+
+  // رویدادها
+  startBtn.addEventListener('click', startGame);
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = true;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = true;
+    if (state === 'gameover' && (e.key === 'Enter' || e.key === ' ')) restart();
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keys.left = false;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keys.right = false;
+  });
+
+  // لمس/ماوس: حرکت به نقطه لمس
+  const wrap = document.getElementById('wrap');
+  const updatePointer = (clientX) => {
+    const rect = canvas.getBoundingClientRect();
+    pointerX = ((clientX - rect.left) / rect.width) * W;
+  };
+  wrap.addEventListener('pointerdown', (e) => {
+    if (state === 'intro') return; // فقط با دکمه شروع می‌کنیم تا تعامل کاربر ثبت بشه
+    if (state === 'gameover') { restart(); return; }
+    pointerActive = true;
+    updatePointer(e.clientX);
+  });
+  wrap.addEventListener('pointermove', (e) => {
+    if (!pointerActive) return;
+    updatePointer(e.clientX);
+  });
+  wrap.addEventListener('pointerup', () => { pointerActive = false; });
+  wrap.addEventListener('pointercancel', () => { pointerActive = false; });
+
+  function startGame() {
+    overlay.style.display = 'none';
+    reset();
+    state = 'playing';
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function reset() {
+    tiles = [];
+    score = 0;
+    hud.textContent = `نمره پارسافر: ${score}`;
+    player.x = W / 2;
+    player.y = H - 80;
+    spawnTimer = 0;
+    spawnInterval = rand(spawnMin, spawnMax);
+  }
+
+  function restart() {
+    state = 'playing';
+    reset();
+  }
+
+  function loop(t) {
+    const dt = Math.min((t - lastTime) / 1000, 0.033); // محدودیت برای جهش‌ها
+    lastTime = t;
+
+    if (state === 'playing') {
+      update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    } else if (state === 'gameover') {
+      draw(); // یک فریم برای پیام باخت
+    }
+  }
+
+  function update(dt) {
+    // حرکت بازیکن
+    if (player.targetMode && pointerActive) {
+      // حرکت نرم به سمت محل لمس
+      const dx = pointerX - player.x;
+      const maxStep = player.speed * dt * 1.5; // نرم ولی سریع
+      if (Math.abs(dx) <= maxStep) player.x = pointerX;
+      else player.x += Math.sign(dx) * maxStep;
+    } else {
+      // کیبورد
+      if (keys.left) player.x -= player.speed * dt;
+      if (keys.right) player.x += player.speed * dt;
+    }
+    // محدودیت دیواره‌ها
+    player.x = clamp(player.x, player.r, W - player.r);
+
+    // تولید کاشی
+    spawnTimer += dt * 1000;
+    if (spawnTimer >= spawnInterval) {
+      spawnTile();
+      spawnTimer = 0;
+      spawnInterval = rand(spawnMin, spawnMax);
+    }
+
+    // حرکت کاشی‌ها
+    for (const tile of tiles) {
+      tile.y += tile.vy * dt;
+    }
+
+    // حذف و امتیاز
+    tiles = tiles.filter(tile => {
+      if (tile.y - tileSize > H) {
+        score++;
+        hud.textContent = `نمره پارسافر: ${score}`;
+        return false;
+      }
+      return true;
+    });
+
+    // برخورد دایره با مستطیل
+    for (const tile of tiles) {
+      if (circleRectCollision(player.x, player.y, player.r, tile.x, tile.y, tileSize, tileSize)) {
+        gameOver();
+        break;
+      }
+    }
+  }
+
+  function draw() {
+    // زمینه
+    ctx.clearRect(0, 0, W, H);
+    // کاشی‌ها
+    ctx.fillStyle = '#8B4513';
+    for (const tile of tiles) {
+      ctx.fillRect(tile.x, tile.y, tileSize, tileSize);
+      // خط بند برای زیبایی
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.strokeRect(tile.x, tile.y, tileSize, tileSize);
+    }
+    // بازیکن (صورت + سبیل)
+    drawFace(ctx, player.x, player.y, player.r);
+
+    if (state === 'gameover') {
+      // پیام باخت
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#ff3b3b';
+      ctx.font = 'bold 32px Tahoma';
+      ctx.textAlign = 'center';
+      ctx.fillText('سوختی هی هی هی', W / 2, H / 2 - 10);
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px Tahoma';
+      ctx.fillText(`نمره پارسافر: ${score}`, W / 2, H / 2 + 24);
+      ctx.fillText('برای شروع دوباره لمس کن یا Enter بزن', W / 2, H / 2 + 54);
+      ctx.restore();
+    }
+  }
+
+  function spawnTile() {
+    const x = Math.random() * (W - tileSize);
+    tiles.push({ x, y: -tileSize, vy: fallSpeed });
+  }
+
+  function gameOver() {
+    state = 'gameover';
+  }
+
+  // ابزارها
+  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+  function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+  function circleRectCollision(cx, cy, cr, rx, ry, rw, rh) {
+    // نزدیک‌ترین نقطه مستطیل به مرکز دایره
+    const nx = clamp(cx, rx, rx + rw);
+    const ny = clamp(cy, ry, ry + rh);
+    const dx = cx - nx;
+    const dy = cy - ny;
+    return (dx*dx + dy*dy) <= (cr*cr);
+  }
+
+  function drawFace(ctx, x, y, r) {
+    ctx.save();
+
+    // سر
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffe0bd';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#333';
+    ctx.stroke();
+
+    // چشم‌ها
+    const eyeOffsetX = r * 0.35;
+    const eyeOffsetY = r * 0.2;
+    const eyeR = r * 0.08;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(x - eyeOffsetX, y - eyeOffsetY, eyeR, 0, Math.PI * 2);
+    ctx.arc(x + eyeOffsetX, y - eyeOffsetY, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // لب (خط)
+    const mouthY = y + r * 0.15;
+    const mouthW = r * 0.5;
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - mouthW, mouthY);
+    ctx.lineTo(x + mouthW, mouthY);
+    ctx.stroke();
+
+    // سبیل با چند سهمیِ وارونه (∩) بالای لب
+    // سه قطعه کوتاه با قوس رو به بالا و کمی پهنا
+    const stacheY = mouthY - r * 0.1;
+    const stacheHalfW = r * 0.65;
+    const parts = 4; // چند سهمی محدود شده
+    const seg = (stacheHalfW * 2) / parts;
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = 3;
+    for (let i = 0; i < parts; i++) {
+      const x0 = x - stacheHalfW + i * seg;
+      const x1 = x - stacheHalfW + (i + 1) * seg;
+      const y0 = stacheY, y1 = stacheY;
+      const cx = (x0 + x1) / 2;
+      const cy = stacheY - r * 0.12; // کنترل‌پوینت بالاتر از y0 → قوس وارونه (∩)
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(cx, cy, x1, y1);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+})();
+</script>
+</body>
+</html>
